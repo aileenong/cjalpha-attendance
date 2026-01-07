@@ -11,7 +11,7 @@ from streamlit_webrtc import webrtc_streamer
 import logging
 from datetime import datetime
 import time
-import datetime
+#import datetime
 
 logging.getLogger("streamlit").setLevel(logging.ERROR)
 
@@ -92,6 +92,10 @@ def add_employee(employee_code, name, department):
     img.save(buf, format="PNG")
     qr_bytes = buf.getvalue()
 
+    employee_code = employee_code.strip().upper()
+    name = name.strip().upper()
+    department = department.strip().upper() 
+    
     cursor.execute(
         "INSERT INTO employees (employee_code, name, department, qr_code) VALUES (?, ?, ?, ?)",
         (employee_code, name, department, qr_bytes)
@@ -103,6 +107,8 @@ def add_employee(employee_code, name, department):
     img.save(filename, format="PNG")
 
 def show_employee_qr(employee_code):
+    employee_code = employee_code.strip().upper()
+
     cursor.execute("SELECT qr_code FROM employees WHERE employee_code=? or name=?", (employee_code,employee_code))
     row = cursor.fetchone()
     if row:
@@ -111,18 +117,23 @@ def show_employee_qr(employee_code):
         st.image(img, caption=f"QR Code for {employee_code}")
 
 def log_attendance(emp_code):
+    emp_code = emp_code.strip().upper()
+    
     cursor.execute("SELECT id, name FROM employees WHERE employee_code=?", (emp_code,))
     row = cursor.fetchone()
     if not row:
         st.error("Employee not found!")
         return
        
-    emp_id = row[0]
-    name = row[1]
-    
+    #emp_id = row[0]
+    #name = row[1]
+
+    emp_id = row[0].strip().upper()
+    name = row[1].strip().upper()   
+
     cursor.execute("""
         SELECT id FROM attendance
-        WHERE employee_id=? AND date(check_in_time)=date('now')
+        WHERE employee_id=? AND date(check_in_time)=datetime('now')
     """, (emp_id,))
     existing = cursor.fetchone()
 
@@ -149,6 +160,8 @@ def show_daily_report():
     st.dataframe(df)
 
 def show_employee_report(identifier, start_date=None, end_date=None):
+
+    identifier = identifier.strip().upper()
     query = """
     SELECT e.employee_code, e.name, date(a.check_in_time) AS date_present
     FROM attendance a
@@ -180,18 +193,22 @@ def show_employee_report(identifier, start_date=None, end_date=None):
         st.info(f"{identifier} was present on {total_days} day(s) "
                 f"between {start_date} and {end_date}.")
 
-# -----------------------------
-# QR Scanner using OpenCV
-# -----------------------------
+from streamlit_webrtc import webrtc_streamer, VideoTransformerBase
+
 detector = cv2.QRCodeDetector()
-placeholder = st.empty()
 
 def video_frame_callback(frame):
     img = frame.to_ndarray(format="bgr24")
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     data, bbox, _ = detector.detectAndDecode(img)
+    print("Decoded data:",data)
+
+    if data:
+        st.session_state["last_qr"] = data.strip().upper()
 
     if bbox is not None and data:
-        st.session_state["last_qr"] = data.strip()
+        #qr_data = qr_data.strip().upper()
+        #st.session_state["last_qr"] = qr_data
         n = len(bbox[0])
         for i in range(n):
             pt1 = tuple(bbox[0][i].astype(int))
@@ -199,6 +216,27 @@ def video_frame_callback(frame):
             cv2.line(img, pt1, pt2, (0, 255, 0), 2)
 
     return av.VideoFrame.from_ndarray(img, format="bgr24")
+
+
+# -----------------------------
+# QR Scanner using OpenCV
+# -----------------------------
+#detector = cv2.QRCodeDetector()
+#placeholder = st.empty()
+
+#def video_frame_callback(frame):
+#    img = frame.to_ndarray(format="bgr24")
+#    data, bbox, _ = detector.detectAndDecode(img)
+
+#    if bbox is not None and data:
+#        st.session_state["last_qr"] = data.strip()
+#        n = len(bbox[0])
+#        for i in range(n):
+#            pt1 = tuple(bbox[0][i].astype(int))
+#            pt2 = tuple(bbox[0][(i+1) % n].astype(int))
+#            cv2.line(img, pt1, pt2, (0, 255, 0), 2)
+
+#    return av.VideoFrame.from_ndarray(img, format="bgr24")
 
 def decode_qr_from_upload(uploaded_file):
     file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
@@ -304,7 +342,26 @@ else:
                             log_attendance(qr_data)
                     else:
                         st.error("No QR code detected")
-            
+            elif method == "Camera Scan":
+                if not st.session_state.get("stop_stream", False):
+                    webrtc_streamer(
+                        key="qr-scanner",
+                        video_frame_callback=video_frame_callback,
+                        rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
+                        media_stream_constraints={"video": True, "audio": False},
+                    )
+                # auto log when QR is detected
+                if "last_qr" in st.session_state and st.session_state["last_qr"]:
+                    qr_data = st.session_state["last_qr"]
+                    st.success(f"Decoded QR: {qr_data}")
+                    #if st.button("Log Attendance"):
+                    log_attendance(qr_data)
+
+                    # stop the stream after logging
+                    st.session_state["stop_stream"] = True
+                    st.session_state["last_qr"] = None
+                    #del st.session_state["last_qr"]
+                    
         elif choice == "Daily Report":
             st.subheader("Daily Attendance Report")
             show_daily_report()
